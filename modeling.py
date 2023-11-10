@@ -59,7 +59,8 @@ class MultiTaskMRCModel(nn.Module):
         self.mrc_head = MRCHead(d_model=self.hf_model.config.hidden_size, nhead=self.hf_model.config.num_attention_heads, num_labels=3)
        
 
-    def forward(self, batch, mrc_labels=None):
+    def forward(self, batch):
+        mrc_labels = batch.pop('mrc_labels', None) 
         ranker_out: SequenceClassifierOutput = self.hf_model(**batch, return_dict=True, output_hidden_states=True)
         reranker_logits = ranker_out.logits
         hidden_states = ranker_out.hidden_states
@@ -96,9 +97,11 @@ class MultiTaskMRCModel(nn.Module):
             cls, model_args: ModelArguments, data_args: DataArguments, train_args: TrainingArguments,
             *args, **kwargs
     ):
+        task_list = kwargs.pop('task_list', ['mrc'])
+        freeze_hf_model = kwargs.pop('freeze_hf_model', False)
         hf_model = AutoModelForSequenceClassification.from_pretrained(*args, **kwargs)
-        reranker = cls(hf_model, model_args, data_args, train_args)
-        return reranker
+        multi_task_model = cls(hf_model, model_args, data_args, train_args, task_list=task_list, freeze_hf_model=freeze_hf_model)
+        return multi_task_model
 
     def save_pretrained(self, output_dir: str):
         self.hf_model.save_pretrained(output_dir)

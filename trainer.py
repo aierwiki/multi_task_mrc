@@ -4,13 +4,12 @@ from typing import Optional
 
 import torch
 from transformers.trainer import Trainer
-
-from modeling import MultiTaskMRCModel
+from modeling import MultiTaskMRCModel, MultiTaskMRCOutput
 
 logger = logging.getLogger(__name__)
 
 
-class CETrainer(Trainer):
+class MultiTaskMRCTrainer(Trainer):
     def _save(self, output_dir: Optional[str] = None):
         output_dir = output_dir if output_dir is not None else self.args.output_dir
         os.makedirs(output_dir, exist_ok=True)
@@ -30,5 +29,6 @@ class CETrainer(Trainer):
         torch.save(self.args, os.path.join(output_dir, "training_args.bin"))
 
     def compute_loss(self, model: MultiTaskMRCModel, inputs):
-        return model(inputs)['loss']
+        output:MultiTaskMRCOutput = model(inputs)
+        return output.loss
 

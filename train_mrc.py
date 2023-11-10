@@ -3,16 +3,17 @@ import os
 from pathlib import Path
 import light_hf_proxy
 
-from transformers import AutoConfig, AutoTokenizer, TrainingArguments
+from transformers import AutoConfig, AutoTokenizer, TrainingArguments, DataCollatorForTokenClassification
+from transformers import XLMRobertaTokenizerFast, default_data_collator
 from transformers import (
     HfArgumentParser,
     set_seed,
 )
 
 from arguments import ModelArguments, DataArguments
-from data import TrainDatasetForCE, GroupCollator
 from modeling import MultiTaskMRCModel
-from trainer import CETrainer
+from trainer import MultiTaskMRCTrainer
+from data_mrc import get_dataset as get_mrc_dataset
 
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ def main():
 
     num_labels = 1
 
-    tokenizer = AutoTokenizer.from_pretrained(
+    tokenizer = XLMRobertaTokenizerFast.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
         use_fast=False,
@@ -75,15 +76,16 @@ def main():
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
         config=config,
         cache_dir=model_args.cache_dir,
+        task_list=['mrc'],
     )
-
-    train_dataset = TrainDatasetForCE(data_args, tokenizer=tokenizer)
-    _trainer_class = CETrainer
+    training_args.remove_unused_columns=False
+    train_dataset = get_mrc_dataset(data_args, tokenizer)
+    _trainer_class = MultiTaskMRCTrainer
     trainer = _trainer_class(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        data_collator=GroupCollator(tokenizer),
+        data_collator=default_data_collator,
         tokenizer=tokenizer
     )
 

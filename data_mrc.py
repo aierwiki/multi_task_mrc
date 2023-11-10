@@ -4,12 +4,12 @@ import random
 from typing import List, Tuple, Dict
 import numpy as np
 import datasets
-from transformers import PreTrainedTokenizer, AutoTokenizer
+from transformers import XLMRobertaTokenizerFast, AutoTokenizer
 
 from arguments import DataArguments
 
 
-def prepare_features(examples: List[dict], tokenizer: PreTrainedTokenizer, max_length=512, stride=32):
+def prepare_features(examples: List[dict], tokenizer: XLMRobertaTokenizerFast, max_length=512, stride=32):
     """
     {
         "query": "渝北区面积", 
@@ -51,13 +51,13 @@ def prepare_features(examples: List[dict], tokenizer: PreTrainedTokenizer, max_l
                     break
             one_sample_labels.append(label)
         labels.append(one_sample_labels)
-    tokenized_examples["labels"] = labels
+    tokenized_examples["mrc_labels"] = labels
     return tokenized_examples
 
     
 
 
-def get_dataset(args: DataArguments, tokenizer: PreTrainedTokenizer):
+def get_dataset(args: DataArguments, tokenizer: XLMRobertaTokenizerFast):
     """
     {
         "query": "渝北区面积", 
@@ -82,14 +82,14 @@ def get_dataset(args: DataArguments, tokenizer: PreTrainedTokenizer):
 
 def main():
     model_name = "BAAI/bge-reranker-base"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = XLMRobertaTokenizerFast.from_pretrained(model_name)
     args = DataArguments("./data/baidu_search_small_standard.jsonl")
     dataset = get_dataset(args, tokenizer)
     for i in range(10):
         example = dataset[i]
         input_ids = example["input_ids"]
         input_ids = np.array(input_ids)
-        labels = example["labels"]
+        labels = example["mrc_labels"]
         labels = np.array(labels)
         ans_input_ids = input_ids[labels == 1]
         ans = tokenizer.decode(ans_input_ids)
