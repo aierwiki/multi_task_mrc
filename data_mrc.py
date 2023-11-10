@@ -1,74 +1,101 @@
 import math
 import os
 import random
-from dataclasses import dataclass
 from typing import List, Tuple, Dict
-
+import numpy as np
 import datasets
-import torch
-from torch.utils.data import Dataset
-from transformers import DataCollatorWithPadding
-from transformers import PreTrainedTokenizer, BatchEncoding
+from transformers import PreTrainedTokenizer, AutoTokenizer
 
 from arguments import DataArguments
 
 
-class TrainDatasetForCE(Dataset):
-    def __init__(
-            self,
-            args: DataArguments,
-            tokenizer: PreTrainedTokenizer,
-    ):
-        if os.path.isdir(args.train_data):
-            train_datasets = []
-            for file in os.listdir(args.train_data):
-                temp_dataset = datasets.load_dataset('json', data_files=os.path.join(args.train_data, file),
-                                                     split='train')
-                train_datasets.append(temp_dataset)
-            self.dataset = datasets.concatenate_datasets(train_datasets)
-        else:
-            self.dataset = datasets.load_dataset('json', data_files=args.train_data, split='train')
+def prepare_features(examples: List[dict], tokenizer: PreTrainedTokenizer, max_length=512, stride=32):
+    """
+    {
+        "query": "渝北区面积", 
+        "context": "渝北区，重庆市辖区，属重庆主城区、重庆大都市区，地处重庆市西北部。东邻长寿区、南与江北区毗邻，同巴南区、南岸区、沙坪坝区隔江相望，西连北碚区、合川区，北接四川省广安市华蓥市、邻水县，总面积1452.03平方千米。"
+        "answer_span": [[10, 20], [40, 50]]
+    }
+    """
+    tokenized_examples = tokenizer(examples["query"], 
+                                   examples["context"], 
+                                   truncation="only_second", 
+                                   max_length=max_length,
+                                   stride=stride,
+                                   return_overflowing_tokens=True, 
+                                   return_offsets_mapping=True, 
+                                   padding="max_length")
+    sample_mapping = tokenized_examples.pop("overflow_to_sample_mapping")   # 类似于[0, 0, 0, 1, 1, 2, 2, 2, 2, 2]
+    offset_mapping = tokenized_examples.pop("offset_mapping")   # 类似于[[(0, 0), (1, 2), (3, 6)], ...]   每个token在对应context文本中的位置
+    # 根据answer_span构造label
+    answer_span_list = examples["answer_span"]
+    labels = []
+    for i, (sample_idx, one_example_offset_mapping) in enumerate(zip(sample_mapping, offset_mapping)):
+        one_sample_labels = []
+        sequence_ids = tokenized_examples.sequence_ids(i)
+        for j, (sequence_id, (token_start, token_end)) in enumerate(zip(sequence_ids, one_example_offset_mapping)):
+            if sequence_id != 1:
+                one_sample_labels.append(-100)
+                continue
 
-        self.tokenizer = tokenizer
-        self.args = args
-        self.total_len = len(self.dataset)
+            if token_start == 0 and token_end == 0: # special tokens 直接过滤
+                one_sample_labels.append(-100)
+                continue
 
-    def create_one_example(self, qry_encoding: str, doc_encoding: str):
-        item = self.tokenizer.encode_plus(
-            qry_encoding,
-            doc_encoding,
-            truncation=True,
-            max_length=self.args.max_len,
-            padding=False,
-        )
-        return item
+            spans = answer_span_list[sample_idx]
+            # 如果[token_start,token_end)区间和spans中的任意一个span有交集，则label为1，否则为0
+            label = 0
+            for span in spans:
+                if token_start < span[1] and token_end > span[0]:
+                    label = 1
+                    break
+            one_sample_labels.append(label)
+        labels.append(one_sample_labels)
+    tokenized_examples["labels"] = labels
+    return tokenized_examples
 
-    def __len__(self):
-        return self.total_len
-
-    def __getitem__(self, item) -> List[BatchEncoding]:
-        query = self.dataset[item]['query']
-        pos = random.choice(self.dataset[item]['pos'])
-        if len(self.dataset[item]['neg']) < self.args.train_group_size - 1:
-            num = math.ceil((self.args.train_group_size - 1) / len(self.dataset[item]['neg']))
-            negs = random.sample(self.dataset[item]['neg'] * num, self.args.train_group_size - 1)
-        else:
-            negs = random.sample(self.dataset[item]['neg'], self.args.train_group_size - 1)
-
-        batch_data = []
-        batch_data.append(self.create_one_example(query, pos))
-        for neg in negs:
-            batch_data.append(self.create_one_example(query, neg))
-
-        return batch_data
+    
 
 
+def get_dataset(args: DataArguments, tokenizer: PreTrainedTokenizer):
+    """
+    {
+        "query": "渝北区面积", 
+        "context": "渝北区，重庆市辖区，属重庆主城区、重庆大都市区，地处重庆市西北部。东邻长寿区、南与江北区毗邻，同巴南区、南岸区、沙坪坝区隔江相望，西连北碚区、合川区，北接四川省广安市华蓥市、邻水县，总面积1452.03平方千米。"
+        "answer_span": [[10, 20], [40, 50]]
+    }
+    """
+    if os.path.isdir(args.train_data):
+        train_datasets = []
+        for file in os.listdir(args.train_data):
+            temp_dataset = datasets.load_dataset('json', data_files=os.path.join(args.train_data, file),
+                                                    split='train')
+            train_datasets.append(temp_dataset)
+        dataset = datasets.concatenate_datasets(train_datasets)
+    else:
+        dataset = datasets.load_dataset('json', data_files=args.train_data, split='train')
+    
+    tokenized_dataset = dataset.map(prepare_features, fn_kwargs={"tokenizer": tokenizer}, batched=True, remove_columns=dataset.column_names)
 
-@dataclass
-class GroupCollator(DataCollatorWithPadding):
-    def __call__(
-            self, features
-    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
-        if isinstance(features[0], list):
-            features = sum(features, [])
-        return super().__call__(features)
+    return tokenized_dataset
+
+
+def main():
+    model_name = "BAAI/bge-reranker-base"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    args = DataArguments("./data/baidu_search_small_standard.jsonl")
+    dataset = get_dataset(args, tokenizer)
+    for i in range(10):
+        example = dataset[i]
+        input_ids = example["input_ids"]
+        input_ids = np.array(input_ids)
+        labels = example["labels"]
+        labels = np.array(labels)
+        ans_input_ids = input_ids[labels == 1]
+        ans = tokenizer.decode(ans_input_ids)
+        print(f"ans: {ans}")
+        break
+
+
+if __name__ == "__main__":
+    main()
