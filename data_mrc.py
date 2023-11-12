@@ -52,12 +52,10 @@ def prepare_features(examples: List[dict], tokenizer: XLMRobertaTokenizerFast, m
             one_sample_labels.append(label)
         labels.append(one_sample_labels)
     tokenized_examples["mrc_labels"] = labels
-    return tokenized_examples
-
-    
+    return tokenized_examples, sample_mapping, offset_mapping
 
 
-def get_dataset(args: DataArguments, tokenizer: XLMRobertaTokenizerFast):
+def get_dataset(train_data:str, tokenizer: XLMRobertaTokenizerFast):
     """
     {
         "query": "渝北区面积", 
@@ -65,26 +63,26 @@ def get_dataset(args: DataArguments, tokenizer: XLMRobertaTokenizerFast):
         "answer_span": [[10, 20], [40, 50]]
     }
     """
-    if os.path.isdir(args.train_data):
+    if os.path.isdir(train_data):
         train_datasets = []
-        for file in os.listdir(args.train_data):
-            temp_dataset = datasets.load_dataset('json', data_files=os.path.join(args.train_data, file),
+        for file in os.listdir(train_data):
+            temp_dataset = datasets.load_dataset('json', data_files=os.path.join(train_data, file),
                                                     split='train')
             train_datasets.append(temp_dataset)
         dataset = datasets.concatenate_datasets(train_datasets)
     else:
-        dataset = datasets.load_dataset('json', data_files=args.train_data, split='train')
+        dataset = datasets.load_dataset('json', data_files=train_data, split='train')
     
-    tokenized_dataset = dataset.map(prepare_features, fn_kwargs={"tokenizer": tokenizer}, batched=True, remove_columns=dataset.column_names)
+    tokenized_dataset, sample_mapping, offset_mapping = dataset.map(prepare_features, fn_kwargs={"tokenizer": tokenizer}, batched=True, remove_columns=dataset.column_names)
 
-    return tokenized_dataset
+    return tokenized_dataset, sample_mapping, offset_mapping
 
 
 def main():
     model_name = "BAAI/bge-reranker-base"
     tokenizer = XLMRobertaTokenizerFast.from_pretrained(model_name)
-    args = DataArguments("./data/baidu_search_small_standard.jsonl")
-    dataset = get_dataset(args, tokenizer)
+    train_data = "./data/baidu_search_small_standard.jsonl"
+    dataset = get_dataset(train_data, tokenizer)
     for i in range(10):
         example = dataset[i]
         input_ids = example["input_ids"]
