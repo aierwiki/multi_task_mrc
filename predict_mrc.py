@@ -1,6 +1,7 @@
 import os
 import json
 from loguru import logger
+import torch
 from transformers import XLMRobertaTokenizerFast, AutoModel
 from transformers import TrainingArguments, HfArgumentParser
 from arguments import ModelArguments, DataArguments
@@ -9,8 +10,11 @@ from split_sentence import SplitSentence
 
 
 def predict(query, context, max_length=512, stride=32):
+    path = os.path.dirname(os.path.abspath(__file__))
     parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
-    model_args, data_args, training_args = parser.parse_json_file(json_file='./predict_args.json')
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    json_file = os.path.join(path, 'predict_args.json')
+    model_args, data_args, training_args = parser.parse_json_file(json_file=json_file)
     tokenizer = XLMRobertaTokenizerFast.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
@@ -21,6 +25,7 @@ def predict(query, context, max_length=512, stride=32):
                                       model_args.model_name_or_path,
                                       cache_dir=model_args.cache_dir,
                                       task_list=['mrc'])
+    model.to(device)
     tokenized_examples = tokenizer(query,
                                    context,
                                    truncation="only_second",
@@ -28,12 +33,16 @@ def predict(query, context, max_length=512, stride=32):
                                    stride=stride,
                                    return_overflowing_tokens=True,
                                    return_offsets_mapping=True,
-                                   padding="max_length")
-    sample_mapping = tokenized_examples.pop("overflow_to_sample_mapping")   # 类似于[0, 0, 0, 1, 1, 2, 2, 2, 2, 2]
-    offset_mapping = tokenized_examples.pop("offset_mapping")   # 类似于[[(0, 0), (1, 2), (3, 6)], ...]   每个token在对应context文本中的位置
-
-    result:MultiTaskMRCOutput = model(tokenized_examples)
-    logits = result.mrc_logits.cup().numpy()    # batch, seq_len, 2
+                                   padding="max_length",
+                                   return_tensors='pt')
+    sample_mapping = tokenized_examples.pop("overflow_to_sample_mapping").numpy().tolist()   # 类似于[0, 0, 0, 1, 1, 2, 2, 2, 2, 2]
+    offset_mapping = tokenized_examples.pop("offset_mapping").numpy().tolist()   # 类似于[[(0, 0), (1, 2), (3, 6)], ...]   每个token在对应context文本中的位置
+    for k, v in tokenized_examples.items():
+        tokenized_examples[k] = v.to(device)
+    model.eval()
+    with torch.no_grad():
+        result:MultiTaskMRCOutput = model(tokenized_examples)
+    logits = result.mrc_logits.cpu().numpy()    # batch, seq_len, 2
     labels = logits.argmax(axis=-1)
     # 获取context中每个word的label
     context_word_labels = [0 for _ in context]
@@ -42,11 +51,12 @@ def predict(query, context, max_length=512, stride=32):
         for j, (sequence_id, (token_start, token_end)) in enumerate(zip(sequence_ids, offset_mapping[i])):
             if sequence_id != 1:
                 continue
-            context_word_labels[token_start:token_end] = labels[i][j]
+            for k in range(token_start, token_end):
+                context_word_labels[k] = labels[i][j]
     # 将context进行分句，如果每个句子中label为1的word的数量超过一半，则该句子作为答案，然后将答案的span进行保存
     answer_spans = []
     split_sentence = SplitSentence()
-    sentence_list = split_sentence.split_sentence(context, criterion='coarse', max_sen_len=128, min_sen_len=16)
+    sentence_list = split_sentence(context, criterion='coarse', max_sen_len=128, min_sen_len=16)
     total_len = sum([len(sen) for sen in sentence_list])
     assert total_len == len(context)
     sentence_word_cnt = {i:0 for i in range(len(sentence_list))}

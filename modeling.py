@@ -60,7 +60,7 @@ class MultiTaskMRCModel(nn.Module):
        
 
     def forward(self, batch):
-        mrc_labels = batch.pop('mrc_labels', None) 
+        mrc_labels = batch.pop('mrc_labels', None)
         ranker_out: SequenceClassifierOutput = self.hf_model(**batch, return_dict=True, output_hidden_states=True)
         reranker_logits = ranker_out.logits
         hidden_states = ranker_out.hidden_states
@@ -90,6 +90,10 @@ class MultiTaskMRCModel(nn.Module):
         else:
             if 'reranker' in self.task_list or self.task_list is None:
                 output.reranker_logits = reranker_logits
+            if 'mrc' in self.task_list or self.task_list is None:
+                # 将hidden_states[-1]作为输入，做序列标注任务
+                mrc_logits = self.mrc_head(hidden_states[-1])
+                output.mrc_logits = mrc_logits
         return output
 
     @classmethod
