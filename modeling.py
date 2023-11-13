@@ -1,3 +1,4 @@
+import os
 import logging
 from typing import List, Optional, Tuple
 from dataclasses import dataclass
@@ -35,16 +36,15 @@ class MRCHead(nn.Module):
 
 
 class MultiTaskMRCModel(nn.Module):
-    def __init__(self, hf_model: PreTrainedModel, model_args: ModelArguments, data_args: DataArguments,
-                 train_args: TrainingArguments, task_list:List=['mrc'], freeze_hf_model=False):
+    def __init__(self, hf_model: PreTrainedModel, mrc_head: MRCHead, train_group_size = None, per_device_train_batch_size = 1, 
+                 task_list:List=['mrc'], freeze_hf_model=False):
         """
         task_list: list of task names, e.g. ['mrc', 'reranker']，用于指定训练的任务，如果为None的话，表示训练所有任务
         """
         super().__init__()
         self.hf_model = hf_model
-        self.model_args = model_args
-        self.train_args = train_args
-        self.data_args = data_args
+        self.train_group_size = train_group_size
+        self.per_device_train_batch_size = per_device_train_batch_size
         self.task_list = task_list
         self.freeze_hf_model = freeze_hf_model
         if self.freeze_hf_model:
@@ -54,9 +54,9 @@ class MultiTaskMRCModel(nn.Module):
 
         self.register_buffer(
             'target_label',
-            torch.zeros(self.train_args.per_device_train_batch_size, dtype=torch.long)
+            torch.zeros(self.per_device_train_batch_size, dtype=torch.long)
         )
-        self.mrc_head = MRCHead(d_model=self.hf_model.config.hidden_size, nhead=self.hf_model.config.num_attention_heads, num_labels=3)
+        self.mrc_head = mrc_head
        
 
     def forward(self, batch):
@@ -69,8 +69,8 @@ class MultiTaskMRCModel(nn.Module):
             total_loss = None
             if 'reranker' in self.task_list or self.task_list is None:
                 scores = reranker_logits.view(
-                    self.train_args.per_device_train_batch_size,
-                    self.data_args.train_group_size
+                    self.per_device_train_batch_size,
+                    self.train_group_size
                 )
                 reranker_loss = self.cross_entropy(scores, self.target_label)
                 if total_loss is None:
@@ -98,14 +98,26 @@ class MultiTaskMRCModel(nn.Module):
 
     @classmethod
     def from_pretrained(
-            cls, model_args: ModelArguments, data_args: DataArguments, train_args: TrainingArguments,
-            *args, **kwargs
+            cls, *args, **kwargs
     ):
+        train_group_size = kwargs.pop('train_group_size', 4)
+        per_device_train_batch_size = kwargs.pop('per_device_train_batch_size', 1)
         task_list = kwargs.pop('task_list', ['mrc'])
         freeze_hf_model = kwargs.pop('freeze_hf_model', False)
         hf_model = AutoModelForSequenceClassification.from_pretrained(*args, **kwargs)
-        multi_task_model = cls(hf_model, model_args, data_args, train_args, task_list=task_list, freeze_hf_model=freeze_hf_model)
+        if 'mrc' in task_list or task_list is None:
+            # 加载mrc_head
+            mrc_head = MRCHead(d_model=hf_model.config.hidden_size, nhead=hf_model.config.num_attention_heads, num_labels=3)
+            model_name_or_path = kwargs.get('model_name_or_path', None)
+            if model_name_or_path is not None:
+                mrc_head.load_state_dict(torch.load(os.path.join(model_name_or_path, 'mrc_head.bin')))
+        else:
+            mrc_head = None
+        multi_task_model = cls(hf_model, mrc_head, train_group_size=train_group_size, per_device_train_batch_size=per_device_train_batch_size, 
+                               task_list=task_list, freeze_hf_model=freeze_hf_model)
         return multi_task_model
 
     def save_pretrained(self, output_dir: str):
         self.hf_model.save_pretrained(output_dir)
+        # 保存mrc_head
+        torch.save(self.mrc_head.state_dict(), os.path.join(output_dir, 'mrc_head.bin'))

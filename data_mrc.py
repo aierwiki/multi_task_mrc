@@ -79,7 +79,7 @@ def get_dataset(train_data:str, tokenizer: XLMRobertaTokenizerFast):
     else:
         dataset = datasets.load_dataset('json', data_files=train_data, split='train')
     
-    tokenized_dataset:Dataset = dataset.map(prepare_features, fn_kwargs={"tokenizer": tokenizer}, batched=True, remove_columns=dataset.column_names)
+    tokenized_dataset:Dataset = dataset.map(prepare_features, fn_kwargs={"tokenizer": tokenizer}, batched=True, remove_columns=dataset.column_names, load_from_cache_file=False)
     sample_mapping = tokenized_dataset["sample_mapping"]
     offset_mapping = tokenized_dataset["offset_mapping"]
     sequence_ids_mapping = tokenized_dataset["sequence_ids_mapping"]

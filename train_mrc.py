@@ -69,17 +69,18 @@ def main():
         cache_dir=model_args.cache_dir,
     )
     _model_class = MultiTaskMRCModel
-
     model = _model_class.from_pretrained(
-        model_args, data_args, training_args,
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
         config=config,
         cache_dir=model_args.cache_dir,
+        train_group_size = data_args.train_group_size,
+        per_device_train_batch_size = training_args.per_device_train_batch_size,
         task_list=['mrc'],
+        freeze_hf_model=True
     )
     training_args.remove_unused_columns=False
-    train_dataset, sample_mapping, offset_mapping, sequence_ids_mapping, ori_dataset = get_mrc_dataset(data_args, tokenizer)
+    train_dataset, sample_mapping, offset_mapping, sequence_ids_mapping, ori_dataset = get_mrc_dataset(data_args.train_data, tokenizer)
     _trainer_class = MultiTaskMRCTrainer
     trainer = _trainer_class(
         model=model,
@@ -92,7 +93,7 @@ def main():
     Path(training_args.output_dir).mkdir(parents=True, exist_ok=True)
 
     trainer.train()
-    # trainer.save_model()
+    trainer.save_model()
 
 
 if __name__ == "__main__":

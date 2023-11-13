@@ -38,6 +38,5 @@ class DataArguments:
     )
 
     def __post_init__(self):
-        pass
-        # if not os.path.exists(self.train_data):
-        #     raise FileNotFoundError(f"cannot find file: {self.train_data}, please set a true path")
+        if not os.path.exists(self.train_data):
+            raise FileNotFoundError(f"cannot find file: {self.train_data}, please set a true path")

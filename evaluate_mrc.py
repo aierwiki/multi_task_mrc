@@ -45,10 +45,11 @@ def evaluate(eval_data_file:str):
     eval_dataset, sample_mapping, offset_mapping, sequence_ids_mapping, ori_dataset = get_mrc_dataset(eval_data_file, tokenizer)
     logger.info("sample_mapping: {}".format(sample_mapping))
     _model_class = MultiTaskMRCModel
-    model = _model_class.from_pretrained(model_args, data_args, training_args,
-                                      model_args.model_name_or_path,
-                                      cache_dir=model_args.cache_dir,
-                                      task_list=['mrc'])
+    model = _model_class.from_pretrained(model_args.model_name_or_path,
+                                        cache_dir=model_args.cache_dir,
+                                        task_list=['mrc'],
+                                        train_group_size = data_args.train_group_size,
+                                        per_device_train_batch_size = training_args.per_device_train_batch_size)
     model.to(device)
     data_loader = DataLoader(eval_dataset, batch_size=4, collate_fn=default_data_collator)
     model.eval()
