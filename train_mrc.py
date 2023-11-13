@@ -79,7 +79,7 @@ def main():
         task_list=['mrc'],
     )
     training_args.remove_unused_columns=False
-    train_dataset, sample_mapping, offset_mapping, dataset = get_mrc_dataset(data_args, tokenizer)
+    train_dataset, sample_mapping, offset_mapping, sequence_ids_mapping, ori_dataset = get_mrc_dataset(data_args, tokenizer)
     _trainer_class = MultiTaskMRCTrainer
     trainer = _trainer_class(
         model=model,

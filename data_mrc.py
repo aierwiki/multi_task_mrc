@@ -4,6 +4,7 @@ import random
 from typing import List, Tuple, Dict
 import numpy as np
 import datasets
+from datasets import Dataset
 from transformers import XLMRobertaTokenizerFast, AutoTokenizer
 
 from arguments import DataArguments
@@ -27,12 +28,14 @@ def prepare_features(examples: List[dict], tokenizer: XLMRobertaTokenizerFast, m
                                    padding="max_length")
     sample_mapping = tokenized_examples.pop("overflow_to_sample_mapping")   # 类似于[0, 0, 0, 1, 1, 2, 2, 2, 2, 2]
     offset_mapping = tokenized_examples.pop("offset_mapping")   # 类似于[[(0, 0), (1, 2), (3, 6)], ...]   每个token在对应context文本中的位置
+    sequence_ids_mapping = []   # 类似于[[None, 0, 0, None, 1, 1, 1, 1, None], ...]，0表示query，1表示context
     # 根据answer_span构造label
     answer_span_list = examples["answer_span"]
     labels = []
     for i, (sample_idx, one_example_offset_mapping) in enumerate(zip(sample_mapping, offset_mapping)):
         one_sample_labels = []
         sequence_ids = tokenized_examples.sequence_ids(i)
+        sequence_ids_mapping.append(sequence_ids)
         for j, (sequence_id, (token_start, token_end)) in enumerate(zip(sequence_ids, one_example_offset_mapping)):
             if sequence_id != 1:
                 one_sample_labels.append(-100)
@@ -52,7 +55,10 @@ def prepare_features(examples: List[dict], tokenizer: XLMRobertaTokenizerFast, m
             one_sample_labels.append(label)
         labels.append(one_sample_labels)
     tokenized_examples["mrc_labels"] = labels
-    return tokenized_examples, sample_mapping, offset_mapping
+    tokenized_examples["sequence_ids_mapping"] = sequence_ids_mapping
+    tokenized_examples["sample_mapping"] = sample_mapping
+    tokenized_examples["offset_mapping"] = offset_mapping
+    return tokenized_examples
 
 
 def get_dataset(train_data:str, tokenizer: XLMRobertaTokenizerFast):
@@ -73,16 +79,19 @@ def get_dataset(train_data:str, tokenizer: XLMRobertaTokenizerFast):
     else:
         dataset = datasets.load_dataset('json', data_files=train_data, split='train')
     
-    tokenized_dataset, sample_mapping, offset_mapping = dataset.map(prepare_features, fn_kwargs={"tokenizer": tokenizer}, batched=True, remove_columns=dataset.column_names)
-
-    return tokenized_dataset, sample_mapping, offset_mapping
+    tokenized_dataset:Dataset = dataset.map(prepare_features, fn_kwargs={"tokenizer": tokenizer}, batched=True, remove_columns=dataset.column_names)
+    sample_mapping = tokenized_dataset["sample_mapping"]
+    offset_mapping = tokenized_dataset["offset_mapping"]
+    sequence_ids_mapping = tokenized_dataset["sequence_ids_mapping"]
+    tokenized_dataset = tokenized_dataset.remove_columns(["sample_mapping", "offset_mapping", "sequence_ids_mapping"])
+    return tokenized_dataset, sample_mapping, offset_mapping, sequence_ids_mapping, dataset
 
 
 def main():
     model_name = "BAAI/bge-reranker-base"
     tokenizer = XLMRobertaTokenizerFast.from_pretrained(model_name)
     train_data = "./data/baidu_search_small_standard.jsonl"
-    dataset = get_dataset(train_data, tokenizer)
+    dataset, sample_mapping, offset_mapping, sequence_ids_mapping, origin_dataset = get_dataset(train_data, tokenizer)
     for i in range(10):
         example = dataset[i]
         input_ids = example["input_ids"]
